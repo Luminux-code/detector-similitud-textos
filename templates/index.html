@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ titulo }}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f3f4f6; color: #1f2937; }
+  main { max-width: 1250px; margin: 0 auto; padding: 20px; }
+  h1 { text-align: center; margin: 10px 0 4px; }
+  .sub { text-align: center; color: #6b7280; margin-bottom: 20px; }
+  .paneles { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+  .panel, .barra, .resultados { background: #fff; border-radius: 10px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .panel h3 { margin: 0 0 8px; }
+  textarea { width: 100%; height: 320px; resize: vertical; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; }
+  .fila { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .fila .info { flex: 1; color: #6b7280; font-size: 14px; }
+  button { background: #2563eb; color: #fff; border: 0; padding: 9px 16px; border-radius: 6px; cursor: pointer; font: inherit; }
+  button:hover { background: #1d4ed8; }
+  button.gris { background: #9ca3af; }
+  button.gris:hover { background: #6b7280; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .barra { display: flex; align-items: center; gap: 10px; margin: 15px 0; }
+  .barra .espacio { flex: 1; }
+  select { padding: 9px; border-radius: 6px; border: 1px solid #d1d5db; font: inherit; }
+  #analizar { font-weight: bold; padding: 11px 22px; }
+  .metricas { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .metrica { background: #e5e7eb; border-radius: 8px; padding: 10px; text-align: center; }
+  .metrica .t { font-size: 12px; color: #4b5563; min-height: 30px; }
+  .metrica .v { font-size: 22px; font-weight: bold; margin-top: 4px; }
+  .metrica .p { font-size: 13px; color: #4b5563; }
+  #pares { margin-top: 15px; white-space: pre-wrap; font-size: 14px; }
+  .par { border-left: 3px solid #2563eb; padding-left: 10px; margin-bottom: 12px; }
+  .error { color: #b91c1c; margin-top: 10px; }
+  @media (max-width: 900px) {
+    .paneles { grid-template-columns: 1fr; }
+    .metricas { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Detector de Similitud de Textos</h1>
+  <div class="sub">Pega texto o sube un PDF en cada panel para comparar su similitud</div>
+
+  <div class="paneles">
+    {% for n in (1, 2) %}
+    <div class="panel">
+      <h3>Texto / Documento {{ n }}</h3>
+      <textarea id="texto{{ n }}"></textarea>
+      <div class="fila">
+        <span class="info" id="arch{{ n }}">Ningún archivo cargado</span>
+        <input type="file" id="pdf{{ n }}" accept="application/pdf" hidden>
+        <button onclick="document.getElementById('pdf{{ n }}').click()">Subir PDF</button>
+        <button class="gris" onclick="limpiar({{ n }})">Limpiar</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="barra">
+    <label for="modelo">Modelo:</label>
+    <select id="modelo">
+      {% for m in modelos %}<option>{{ m }}</option>{% endfor %}
+    </select>
+    <span class="espacio"></span>
+    <button id="analizar">ANALIZAR SIMILITUD</button>
+    <button class="gris" id="copiar">Copiar tabla</button>
+  </div>
+
+  <div class="resultados">
+    <div class="metricas">
+      {% for nombre in metricas %}
+      <div class="metrica">
+        <div class="t">{{ nombre }}</div>
+        <div class="v" data-metrica="{{ nombre }}">--</div>
+        <div class="p" data-pct="{{ nombre }}"></div>
+      </div>
+      {% endfor %}
+    </div>
+    <div id="pares"></div>
+    <div class="error" id="error"></div>
+  </div>
+</main>
+
+<script>
+let ultimas = {};
+
+function limpiar(n) {
+  document.getElementById("texto" + n).value = "";
+  document.getElementById("arch" + n).textContent = "Ningún archivo cargado";
+  document.getElementById("pdf" + n).value = "";
+}
+
+for (const n of [1, 2]) {
+  document.getElementById("pdf" + n).addEventListener("change", async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    const form = new FormData();
+    form.append("archivo", archivo);
+    document.getElementById("arch" + n).textContent = "Leyendo PDF...";
+    const r = await fetch("/api/pdf", { method: "POST", body: form });
+    const d = await r.json();
+    if (!r.ok) {
+      alert(d.error);
+      limpiar(n);
+      return;
+    }
+    if (d.sin_texto) {
+      alert("No se pudo extraer texto. Puede ser un PDF escaneado (imagen) y necesitaría OCR.");
+    }
+    document.getElementById("texto" + n).value = d.texto;
+    document.getElementById("arch" + n).textContent = `${d.nombre} (${d.palabras} palabras)`;
+  });
+}
+
+document.getElementById("analizar").addEventListener("click", async () => {
+  const btn = document.getElementById("analizar");
+  const err = document.getElementById("error");
+  err.textContent = "";
+  btn.disabled = true;
+  btn.textContent = "Analizando...";
+  try {
+    const r = await fetch("/api/analizar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        texto1: document.getElementById("texto1").value,
+        texto2: document.getElementById("texto2").value,
+        modelo: document.getElementById("modelo").value,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Error desconocido");
+    mostrar(d);
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "ANALIZAR SIMILITUD";
+  }
+});
+
+function mostrar(d) {
+  ultimas = d.metricas;
+  for (const [nombre, valor] of Object.entries(d.metricas)) {
+    document.querySelector(`[data-metrica="${nombre}"]`).textContent = valor.toFixed(4);
+    document.querySelector(`[data-pct="${nombre}"]`).textContent = (valor * 100).toFixed(1) + "%";
+  }
+  const cont = document.getElementById("pares");
+  cont.innerHTML = "<strong>FRAGMENTOS MÁS PARECIDOS:</strong><br><br>";
+  d.pares.forEach((p, i) => {
+    const div = document.createElement("div");
+    div.className = "par";
+    div.textContent =
+      `#${i + 1}  Similitud: ${(p.valor * 100).toFixed(1)}%\n` +
+      `  Doc 1: ${p.doc1.slice(0, 220)}...\n` +
+      `  Doc 2: ${p.doc2.slice(0, 220)}...`;
+    cont.appendChild(div);
+  });
+}
+
+document.getElementById("copiar").addEventListener("click", async () => {
+  if (!Object.keys(ultimas).length) {
+    alert("Primero ejecuta el análisis.");
+    return;
+  }
+  const lineas = ["Técnica\tValor"];
+  for (const [nombre, valor] of Object.entries(ultimas)) {
+    lineas.push(`${nombre}\t${valor.toFixed(4)}`);
+  }
+  await navigator.clipboard.writeText(lineas.join("\n"));
+  alert("Tabla copiada. Pégala en Word o Excel.");
+});
+</script>
+</body>
+</html>
